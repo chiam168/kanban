@@ -1,0 +1,69 @@
+name: Check and deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: index.html exists and has a title
+        run: |
+          test -f index.html
+          grep -q "<title>" index.html
+
+      - name: Project constraints (only the FormSubmit URL may match)
+        run: |
+          hits=$(grep -nEi "localStorage|sessionStorage|indexedDB|document\.cookie|https?://|!important" index.html | grep -v "FORMSUBMIT_ENDPOINT = \"https://formsubmit.co/ajax/" || true)
+          if [ -n "$hits" ]; then
+            echo "::error::Constraint violations in index.html:"
+            echo "$hits"
+            exit 1
+          fi
+
+      - name: Secret scan of published files
+        run: |
+          pattern='AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9_-]{10,}|AIza[0-9A-Za-z_-]{35}|BEGIN [A-Z ]*PRIVATE KEY'
+          if grep -nEI "$pattern" index.html README.md; then
+            echo "::error::Possible secret found"
+            exit 1
+          fi
+
+  deploy:
+    needs: check
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage public files only
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
